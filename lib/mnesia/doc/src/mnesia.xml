@@ -1179,7 +1179,7 @@ mnesia:create_table(person,
           simultaneously, both updates will take effect without the
           risk of losing one of the updates. The new value
           <c>NewVal</c> of the counter is returned.</p>
-        <p>If <c>Key</c> don't exits, a new record is created with the value
+        <p>If <c>Key</c> doesn't exist, a new record is created with the value
           <c>Incr</c> if it is larger than 0, otherwise it is set to 0.</p>
       </desc>
     </func>
