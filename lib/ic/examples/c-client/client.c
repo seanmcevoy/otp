@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  * 
- * Copyright Ericsson AB 1998-2009. All Rights Reserved.
+ * Copyright Ericsson AB 1998-2013. All Rights Reserved.
  * 
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -64,6 +64,7 @@ int main()
 
     /* Initiating pid*/
     strcpy(pid.node,CLNODE);
+    pid.node_org_enc = ERLANG_LATIN1;
     pid.num = 99;
     pid.serial = 0;
     pid.creation = 0;

@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2009-2012. All Rights Reserved.
+ * Copyright Ericsson AB 2009-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -263,7 +263,7 @@ ErlNifEnv* enif_alloc_env(void)
     HEAP_LIMIT(&msg_env->phony_proc) = phony_heap;
     HEAP_END(&msg_env->phony_proc) = phony_heap;
     MBUF(&msg_env->phony_proc) = NULL;
-    msg_env->phony_proc.id = ERTS_INVALID_PID;
+    msg_env->phony_proc.common.id = ERTS_INVALID_PID;
 #ifdef FORCE_HEAP_FRAGS
     msg_env->phony_proc.space_verified = 0;
     msg_env->phony_proc.space_verified_from = NULL;
@@ -287,7 +287,7 @@ void enif_clear_env(ErlNifEnv* env)
     struct enif_msg_environment_t* menv = (struct enif_msg_environment_t*)env;
     Process* p = &menv->phony_proc;
     ASSERT(p == menv->env.proc);
-    ASSERT(p->id == ERTS_INVALID_PID);
+    ASSERT(p->common.id == ERTS_INVALID_PID);
     ASSERT(MBUF(p) == menv->env.heap_frag);
     if (MBUF(p) != NULL) {
 	erts_cleanup_offheap(&MSO(p));
@@ -315,10 +315,11 @@ int enif_send(ErlNifEnv* env, const ErlNifPid* to_pid,
 #endif
     Eterm receiver = to_pid->pid;
     int flush_me = 0;
+    int scheduler = erts_get_scheduler_id() != 0;
 
     if (env != NULL) {
 	c_p = env->proc;
-	if (receiver == c_p->id) {
+	if (receiver == c_p->common.id) {
 	    rp_locks = ERTS_PROC_LOCK_MAIN;
 	    flush_me = 1;
 	}
@@ -334,10 +335,13 @@ int enif_send(ErlNifEnv* env, const ErlNifPid* to_pid,
 #if defined(ERTS_ENABLE_LOCK_CHECK) && defined(ERTS_SMP)
     rp_had_locks = rp_locks;
 #endif
-    rp = erts_pid2proc_opt(c_p, ERTS_PROC_LOCK_MAIN,
-			   receiver, rp_locks, ERTS_P2P_FLG_SMP_INC_REFC);
+
+    rp = (scheduler
+	  ? erts_proc_lookup(receiver)
+	  : erts_pid2proc_opt(c_p, ERTS_PROC_LOCK_MAIN,
+			      receiver, rp_locks, ERTS_P2P_FLG_SMP_INC_REFC));
     if (rp == NULL) {
-	ASSERT(env == NULL || receiver != c_p->id);
+	ASSERT(env == NULL || receiver != c_p->common.id);
 	return 0;
     }
     flush_env(msg_env);
@@ -362,12 +366,12 @@ int enif_send(ErlNifEnv* env, const ErlNifPid* to_pid,
 		       , NIL
 #endif
 		       );
-    if (rp_locks) {	
-	ERTS_SMP_LC_ASSERT(rp_locks == (rp_had_locks | (ERTS_PROC_LOCK_MSGQ | 
-							ERTS_PROC_LOCK_STATUS)));
-	erts_smp_proc_unlock(rp, (ERTS_PROC_LOCK_MSGQ | ERTS_PROC_LOCK_STATUS));
-    }
-    erts_smp_proc_dec_refc(rp);
+    if (c_p == rp)
+	rp_locks &= ~ERTS_PROC_LOCK_MAIN;
+    if (rp_locks)
+	erts_smp_proc_unlock(rp, rp_locks);
+    if (!scheduler)
+	erts_smp_proc_dec_refc(rp);
     if (flush_me) {
 	cache_env(env);
     }
@@ -393,7 +397,7 @@ static int is_offheap(const ErlOffHeap* oh)
 
 ErlNifPid* enif_self(ErlNifEnv* caller_env, ErlNifPid* pid)
 {
-    pid->pid = caller_env->proc->id;
+    pid->pid = caller_env->proc->common.id;
     return pid;
 }
 int enif_get_local_pid(ErlNifEnv* env, ERL_NIF_TERM term, ErlNifPid* pid)
@@ -501,7 +505,7 @@ int enif_inspect_iolist_as_binary(ErlNifEnv* env, Eterm term, ErlNifBinary* bin)
 {
     struct enif_tmp_obj_t* tobj;
     ErtsAlcType_t allocator;
-    Uint sz;
+    ErlDrvSizeT sz;
     if (is_binary(term)) {
 	return enif_inspect_binary(env,term,bin);
     }
@@ -527,7 +531,7 @@ int enif_inspect_iolist_as_binary(ErlNifEnv* env, Eterm term, ErlNifBinary* bin)
     bin->size = sz;
     bin->bin_term = THE_NON_VALUE;
     bin->ref_bin = NULL;
-    io_list_to_buf(term, (char*) bin->data, sz);
+    erts_iolist_to_buf(term, (char*) bin->data, sz);
     ADD_READONLY_CHECK(env, bin->data, bin->size); 
     return 1;
 }
@@ -739,16 +743,23 @@ int enif_get_atom(ErlNifEnv* env, Eterm atom, char* buf, unsigned len,
 {
     Atom* ap;
     ASSERT(encoding == ERL_NIF_LATIN1);
-    if (is_not_atom(atom)) {
+    if (is_not_atom(atom) || len==0) {
 	return 0;
     }
     ap = atom_tab(atom_val(atom));
-    if (ap->len+1 > len) {
+
+    if (ap->latin1_chars < 0 || ap->latin1_chars >= len) {
 	return 0;
     }
-    sys_memcpy(buf, ap->name, ap->len);
-    buf[ap->len] = '\0';
-    return ap->len + 1;
+    if (ap->latin1_chars == ap->len) {
+	sys_memcpy(buf, ap->name, ap->len);
+    }
+    else {
+	int dlen = erts_utf8_to_latin1((byte*)buf, ap->name, ap->len);
+	ASSERT(dlen == ap->latin1_chars); (void)dlen;
+    }
+    buf[ap->latin1_chars] = '\0';
+    return ap->latin1_chars + 1;
 }
 
 int enif_get_int(ErlNifEnv* env, Eterm term, int* ip)
@@ -850,7 +861,10 @@ int enif_get_atom_length(ErlNifEnv* env, Eterm atom, unsigned* len,
     ASSERT(enc == ERL_NIF_LATIN1);
     if (is_not_atom(atom)) return 0;
     ap = atom_tab(atom_val(atom));
-    *len = ap->len;
+    if (ap->latin1_chars < 0) {
+	return 0;
+    }
+    *len = ap->latin1_chars;
     return 1;
 }
 
@@ -957,7 +971,7 @@ ERL_NIF_TERM enif_make_atom(ErlNifEnv* env, const char* name)
 
 ERL_NIF_TERM enif_make_atom_len(ErlNifEnv* env, const char* name, size_t len)
 {
-    return am_atom_put(name, len);
+    return erts_atom_put((byte*)name, len, ERTS_ATOM_ENC_LATIN1, 1);
 }
 
 int enif_make_existing_atom(ErlNifEnv* env, const char* name, ERL_NIF_TERM* atom,
@@ -970,7 +984,7 @@ int enif_make_existing_atom_len(ErlNifEnv* env, const char* name, size_t len,
 				ERL_NIF_TERM* atom, ErlNifCharEncoding encoding)
 {
     ASSERT(encoding == ERL_NIF_LATIN1);
-    return erts_atom_get(name, len, atom);
+    return erts_atom_get(name, len, atom, ERTS_ATOM_ENC_LATIN1);
 }
 
 ERL_NIF_TERM enif_make_tuple(ErlNifEnv* env, unsigned cnt, ...)
@@ -1392,6 +1406,57 @@ size_t enif_sizeof_resource(void* obj)
     return ERTS_MAGIC_BIN_DATA_SIZE(bin) - offsetof(ErlNifResource,data);
 }
 
+
+void* enif_dlopen(const char* lib,
+		  void (*err_handler)(void*,const char*), void* err_arg)
+{
+    ErtsSysDdllError errdesc = ERTS_SYS_DDLL_ERROR_INIT;
+    void* handle;
+    void* init_func;
+    if (erts_sys_ddll_open2(lib, &handle, &errdesc) == ERL_DE_NO_ERROR) {
+	if (erts_sys_ddll_load_nif_init(handle, &init_func, &errdesc) == ERL_DE_NO_ERROR) {
+	    erts_sys_ddll_call_nif_init(init_func);
+	}
+    }
+    else {
+	if (err_handler != NULL) {
+	    (*err_handler)(err_arg, errdesc.str);
+	}
+	handle = NULL;
+    }
+    erts_sys_ddll_free_error(&errdesc);
+    return handle;
+}
+
+void* enif_dlsym(void* handle, const char* symbol,
+		 void (*err_handler)(void*,const char*), void* err_arg)
+{
+    ErtsSysDdllError errdesc = ERTS_SYS_DDLL_ERROR_INIT;
+    void* ret;
+    if (erts_sys_ddll_sym2(handle, symbol, &ret, &errdesc) != ERL_DE_NO_ERROR) {
+	if (err_handler != NULL) {
+	    (*err_handler)(err_arg, errdesc.str);
+	}
+	erts_sys_ddll_free_error(&errdesc);
+	return NULL;
+    }
+    return ret;
+}
+
+int enif_consume_timeslice(ErlNifEnv* env, int percent)
+{
+    Sint reds;
+
+    ASSERT(is_proc_bound(env) && percent >= 1 && percent <= 100);
+    if (percent < 1) percent = 1;
+    else if (percent > 100) percent = 100;
+
+    reds = ((CONTEXT_REDS+99) / 100) * percent;
+    ASSERT(reds > 0 && reds <= CONTEXT_REDS);
+    BUMP_REDS(env->proc, reds);
+    return ERTS_BIF_REDS_LEFT(env->proc) == 0;
+}
+
 /***************************************************************************
  **                              load_nif/2                               **
  ***************************************************************************/
@@ -1524,6 +1589,7 @@ BIF_RETTYPE load_nif_2(BIF_ALIST_2)
     if (len < 0) {
 	BIF_ERROR(BIF_P, BADARG);
     }
+
     lib_name = (char *) erts_alloc(ERTS_ALC_T_TMP, len + 1);
 
     if (intlist_to_buf(BIF_ARG_1, lib_name, len) != len) {
@@ -1531,6 +1597,12 @@ BIF_RETTYPE load_nif_2(BIF_ALIST_2)
 	BIF_ERROR(BIF_P, BADARG);
     }
     lib_name[len] = '\0';
+
+    if (!erts_try_seize_code_write_permission(BIF_P)) {
+	erts_free(ERTS_ALC_T_TMP, lib_name);
+	ERTS_BIF_YIELD2(bif_export[BIF_load_nif_2],
+			BIF_P, BIF_ARG_1, BIF_ARG_2);
+    }
 
     /* Block system (is this the right place to do it?) */
     erts_smp_proc_unlock(BIF_P, ERTS_PROC_LOCK_MAIN);
@@ -1545,11 +1617,11 @@ BIF_RETTYPE load_nif_2(BIF_ALIST_2)
     ASSERT(caller != NULL);
     mod_atom = caller[0];
     ASSERT(is_atom(mod_atom));
-    mod=erts_get_module(mod_atom);
+    mod=erts_get_module(mod_atom, erts_active_code_ix());
     ASSERT(mod != NULL);
 
-    if (!in_area(caller, mod->code, mod->code_length)) {
-	ASSERT(in_area(caller, mod->old_code, mod->old_code_length));
+    if (!in_area(caller, mod->curr.code, mod->curr.code_length)) {
+	ASSERT(in_area(caller, mod->old.code, mod->old.code_length));
 
 	ret = load_nif_error(BIF_P, "old_code", "Calling load_nif from old "
 			     "module '%T' not allowed", mod_atom);
@@ -1584,7 +1656,7 @@ BIF_RETTYPE load_nif_2(BIF_ALIST_2)
 			     "this vm variant (%s).",
 			     entry->vm_variant, ERL_NIF_VM_VARIANT);
     }
-    else if (!erts_is_atom_str((char*)entry->name, mod_atom)) {
+    else if (!erts_is_atom_str((char*)entry->name, mod_atom, 1)) {
 	ret = load_nif_error(BIF_P, bad_lib, "Library module name '%s' does not"
 			     " match calling module '%T'", entry->name, mod_atom);
     }
@@ -1594,8 +1666,8 @@ BIF_RETTYPE load_nif_2(BIF_ALIST_2)
 	for (i=0; i < entry->num_of_funcs && ret==am_ok; i++) {
 	    BeamInstr** code_pp;
 	    ErlNifFunc* f = &entry->funcs[i];
-	    if (!erts_atom_get(f->name, sys_strlen(f->name), &f_atom)
-		|| (code_pp = get_func_pp(mod->code, f_atom, f->arity))==NULL) { 
+	    if (!erts_atom_get(f->name, sys_strlen(f->name), &f_atom, ERTS_ATOM_ENC_LATIN1)
+		|| (code_pp = get_func_pp(mod->curr.code, f_atom, f->arity))==NULL) {
 		ret = load_nif_error(BIF_P,bad_lib,"Function not found %T:%s/%u",
 				     mod_atom, f->name, f->arity);
 	    }    
@@ -1624,18 +1696,18 @@ BIF_RETTYPE load_nif_2(BIF_ALIST_2)
     erts_refc_init(&lib->rt_dtor_cnt, 0);
     lib->mod = mod;
     env.mod_nif = lib;
-    if (mod->nif != NULL) { /* Reload */
+    if (mod->curr.nif != NULL) { /* Reload */
 	int k;
-        lib->priv_data = mod->nif->priv_data;
+        lib->priv_data = mod->curr.nif->priv_data;
 
-	ASSERT(mod->nif->entry != NULL);
+	ASSERT(mod->curr.nif->entry != NULL);
 	if (entry->reload == NULL) {
 	    ret = load_nif_error(BIF_P,reload,"Reload not supported by this NIF library.");
 	    goto error;
 	}
 	/* Check that no NIF is removed */
-	for (k=0; k < mod->nif->entry->num_of_funcs; k++) {
-	    ErlNifFunc* old_func = &mod->nif->entry->funcs[k];
+	for (k=0; k < mod->curr.nif->entry->num_of_funcs; k++) {
+	    ErlNifFunc* old_func = &mod->curr.nif->entry->funcs[k];
 	    for (i=0; i < entry->num_of_funcs; i++) {
 		if (old_func->arity == entry->funcs[i].arity
 		    && sys_strcmp(old_func->name, entry->funcs[i].name) == 0) {			   
@@ -1656,24 +1728,24 @@ BIF_RETTYPE load_nif_2(BIF_ALIST_2)
 	    ret = load_nif_error(BIF_P, reload, "Library reload-call unsuccessful.");
 	}
 	else {
-	    mod->nif->entry = NULL; /* to prevent 'unload' callback */
-	    erts_unload_nif(mod->nif);
+	    mod->curr.nif->entry = NULL; /* to prevent 'unload' callback */
+	    erts_unload_nif(mod->curr.nif);
 	    reload_warning = 1;
 	}
     }
     else {
 	lib->priv_data = NULL;
-	if (mod->old_nif != NULL) { /* Upgrade */
-	    void* prev_old_data = mod->old_nif->priv_data;
+	if (mod->old.nif != NULL) { /* Upgrade */
+	    void* prev_old_data = mod->old.nif->priv_data;
 	    if (entry->upgrade == NULL) {
 		ret = load_nif_error(BIF_P, upgrade, "Upgrade not supported by this NIF library.");
 		goto error;
 	    }
 	    erts_pre_nif(&env, BIF_P, lib);
-	    veto = entry->upgrade(&env, &lib->priv_data, &mod->old_nif->priv_data, BIF_ARG_2);
+	    veto = entry->upgrade(&env, &lib->priv_data, &mod->old.nif->priv_data, BIF_ARG_2);
 	    erts_post_nif(&env);
 	    if (veto) {
-		mod->old_nif->priv_data = prev_old_data;
+		mod->old.nif->priv_data = prev_old_data;
 		ret = load_nif_error(BIF_P, upgrade, "Library upgrade-call unsuccessful.");
 	    }
 	    /*else if (mod->old_nif->priv_data != prev_old_data) {
@@ -1693,20 +1765,21 @@ BIF_RETTYPE load_nif_2(BIF_ALIST_2)
 	/*
 	** Everything ok, patch the beam code with op_call_nif
 	*/
-        mod->nif = lib; 
+        mod->curr.nif = lib;
 	for (i=0; i < entry->num_of_funcs; i++)
 	{
 	    BeamInstr* code_ptr;
-	    erts_atom_get(entry->funcs[i].name, sys_strlen(entry->funcs[i].name), &f_atom); 
-	    code_ptr = *get_func_pp(mod->code, f_atom, entry->funcs[i].arity); 
+	    erts_atom_get(entry->funcs[i].name, sys_strlen(entry->funcs[i].name), &f_atom, ERTS_ATOM_ENC_LATIN1); 
+	    code_ptr = *get_func_pp(mod->curr.code, f_atom, entry->funcs[i].arity);
 	    
 	    if (code_ptr[1] == 0) {
 		code_ptr[5+0] = (BeamInstr) BeamOp(op_call_nif);
 	    }
 	    else { /* Function traced, patch the original instruction word */
-		BpData** bps = (BpData**) code_ptr[1];
-		BpData*  bp  = (BpData*) bps[erts_bp_sched2ix()];
-	        bp->orig_instr = (BeamInstr) BeamOp(op_call_nif);
+		GenericBp* g = (GenericBp *) code_ptr[1];
+		ASSERT(code_ptr[5+0] ==
+		       (BeamInstr) BeamOp(op_i_generic_breakpoint));
+	        g->orig_instr = (BeamInstr) BeamOp(op_call_nif);
 	    }	    
 	    code_ptr[5+1] = (BeamInstr) entry->funcs[i].fptr;
 	    code_ptr[5+2] = (BeamInstr) lib;
@@ -1726,6 +1799,7 @@ BIF_RETTYPE load_nif_2(BIF_ALIST_2)
 
     erts_smp_thr_progress_unblock();
     erts_smp_proc_lock(BIF_P, ERTS_PROC_LOCK_MAIN);
+    erts_release_code_write_permission();
     erts_free(ERTS_ALC_T_TMP, lib_name);
 
     if (reload_warning) {
@@ -1793,7 +1867,7 @@ void erl_nif_init()
 #ifdef USE_VM_PROBES
 void dtrace_nifenv_str(ErlNifEnv *env, char *process_buf)
 {
-    dtrace_pid_str(env->proc->id, process_buf);
+    dtrace_pid_str(env->proc->common.id, process_buf);
 }
 #endif
 

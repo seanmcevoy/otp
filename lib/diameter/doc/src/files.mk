@@ -2,7 +2,7 @@
 
 # %CopyrightBegin%
 #
-# Copyright Ericsson AB 2010-2011. All Rights Reserved.
+# Copyright Ericsson AB 2010-2012. All Rights Reserved.
 #
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -26,6 +26,8 @@ XML_REF1_FILES = \
 XML_REF3_FILES = \
 	diameter.xml \
 	diameter_app.xml \
+	diameter_codec.xml \
+	diameter_make.xml \
 	diameter_transport.xml \
 	diameter_tcp.xml \
 	diameter_sctp.xml

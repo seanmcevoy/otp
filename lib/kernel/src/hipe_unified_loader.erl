@@ -218,7 +218,7 @@ load_common(Mod, Bin, Beam, OldReferencesToPatch) ->
       {MFAs,Addresses} = exports(ExportMap, CodeAddress),
       %% Remove references to old versions of the module.
       ReferencesToPatch = get_refs_from(MFAs, []),
-      remove_refs_from(MFAs),
+      ok = remove_refs_from(MFAs),
       %% Patch all dynamic references in the code.
       %%  Function calls, Atoms, Constants, System calls
       patch(Refs, CodeAddress, ConstMap2, Addresses, TrampolineMap),
@@ -337,11 +337,16 @@ exports(ExportMap, BaseAddress) ->
   exports(ExportMap, BaseAddress, [], []).
 
 exports([Offset,M,F,A,IsClosure,IsExported|Rest], BaseAddress, MFAs, Addresses) ->
-  MFA = {M,F,A},
-  Address = BaseAddress + Offset,
-  FunDef = #fundef{address=Address, mfa=MFA, is_closure=IsClosure,
-		   is_exported=IsExported},
-  exports(Rest, BaseAddress, [MFA|MFAs], [FunDef|Addresses]);
+  case IsExported andalso erlang:is_builtin(M, F, A) of
+    true ->
+      exports(Rest, BaseAddress, MFAs, Addresses);
+    _false ->
+      MFA = {M,F,A},
+      Address = BaseAddress + Offset,
+      FunDef = #fundef{address=Address, mfa=MFA, is_closure=IsClosure,
+		       is_exported=IsExported},
+      exports(Rest, BaseAddress, [MFA|MFAs], [FunDef|Addresses])
+  end;
 exports([], _, MFAs, Addresses) ->
   {MFAs, Addresses}.
 
@@ -505,7 +510,7 @@ patch_offset(Type, Data, Address, ConstAndZone, Addresses) ->
       Atom = Data,
       patch_atom(Address, Atom);
     sdesc ->
-      patch_sdesc(Data, Address, ConstAndZone);
+      patch_sdesc(Data, Address, ConstAndZone, Addresses);
     x86_abs_pcrel ->
       patch_instr(Address, Data, x86_abs_pcrel)
     %% _ ->
@@ -518,14 +523,16 @@ patch_atom(Address, Atom) ->
   patch_instr(Address, hipe_bifs:atom_to_word(Atom), atom).
 
 patch_sdesc(?STACK_DESC(SymExnRA, FSize, Arity, Live),
-	    Address, {_ConstMap2,CodeAddress}) ->
+	    Address, {_ConstMap2,CodeAddress}, _Addresses) ->
   ExnRA =
     case SymExnRA of
       [] -> 0; % No catch
       LabelOffset -> CodeAddress + LabelOffset
     end,
   ?ASSERT(assert_local_patch(Address)),
-  hipe_bifs:enter_sdesc({Address, ExnRA, FSize, Arity, Live}).
+  DBG_MFA = ?IF_DEBUG(address_to_mfa_lth(Address, _Addresses), {undefined,undefined,0}),
+  hipe_bifs:enter_sdesc({Address, ExnRA, FSize, Arity, Live, DBG_MFA}).
+
 
 %%----------------------------------------------------------------
 %% Handle a 'load_address'-type patch.
@@ -732,7 +739,7 @@ find_const(ConstNo, []) ->
 %%
 
 add_ref(CalleeMFA, Address, Addresses, RefType, Trampoline, RemoteOrLocal) ->
-  CallerMFA = address_to_mfa(Address, Addresses),
+  CallerMFA = address_to_mfa_lth(Address, Addresses),
   %% just a sanity assertion below
   true = case RemoteOrLocal of
 	   local ->
@@ -745,11 +752,31 @@ add_ref(CalleeMFA, Address, Addresses, RefType, Trampoline, RemoteOrLocal) ->
   %% io:format("Adding ref ~w\n",[{CallerMFA, CalleeMFA, Address, RefType}]),
   hipe_bifs:add_ref(CalleeMFA, {CallerMFA,Address,RefType,Trampoline,RemoteOrLocal}).
 
-address_to_mfa(Address, [#fundef{address=Adr, mfa=MFA}|_Rest]) when Address >= Adr -> MFA;
-address_to_mfa(Address, [_ | Rest]) -> address_to_mfa(Address, Rest);
-address_to_mfa(Address, []) -> 
-  ?error_msg("Local adddress not found ~w\n",[Address]),
-  exit({?MODULE, local_address_not_found}).
+% For FunDefs sorted from low to high addresses
+address_to_mfa_lth(Address, FunDefs) ->
+    case address_to_mfa_lth(Address, FunDefs, false) of
+	false ->
+	    ?error_msg("Local adddress not found ~w\n",[Address]),
+	    exit({?MODULE, local_address_not_found});
+	MFA ->
+	    MFA
+    end.
+    
+address_to_mfa_lth(Address, [#fundef{address=Adr, mfa=MFA}|Rest], Prev) ->
+  if Address < Adr -> 
+	  Prev;
+     true -> 
+	  address_to_mfa_lth(Address, Rest, MFA)
+  end;
+address_to_mfa_lth(_Address, [], Prev) -> 
+    Prev.
+
+% For FunDefs sorted from high to low addresses
+%% address_to_mfa_htl(Address, [#fundef{address=Adr, mfa=MFA}|_Rest]) when Address >= Adr -> MFA;
+%% address_to_mfa_htl(Address, [_ | Rest]) -> address_to_mfa_htl(Address, Rest);
+%% address_to_mfa_htl(Address, []) -> 
+%%   ?error_msg("Local adddress not found ~w\n",[Address]),
+%%   exit({?MODULE, local_address_not_found}).
 
 %%----------------------------------------------------------------
 %% Change callers of the given module to instead trap to BEAM.
@@ -775,7 +802,7 @@ patch_to_emu_step1(Mod) ->
       %% Find all call sites that call these MFAs. As a side-effect,
       %% create native stubs for any MFAs that are referred.
       ReferencesToPatch = get_refs_from(MFAs, []),
-      remove_refs_from(MFAs),
+      ok = remove_refs_from(MFAs),
       ReferencesToPatch;
     false ->
       %% The first time we load the module, no redirection needs to be done.
@@ -819,11 +846,8 @@ get_refs_from(MFAs, []) ->
   mark_referred_from(MFAs),
   MFAs.
 
-mark_referred_from([MFA|MFAs]) ->
-  hipe_bifs:mark_referred_from(MFA),
-  mark_referred_from(MFAs);
-mark_referred_from([]) ->
-  [].
+mark_referred_from(MFAs) ->
+  lists:foreach(fun(MFA) -> hipe_bifs:mark_referred_from(MFA) end, MFAs).
 
 %%--------------------------------------------------------------------
 %% Given a list of MFAs with referred_from references, update their
@@ -831,11 +855,8 @@ mark_referred_from([]) ->
 %%
 %% The {MFA,Refs} list must come from get_refs_from/2.
 %%
-redirect([MFA|Rest]) ->
-  hipe_bifs:redirect_referred_from(MFA),
-  redirect(Rest);
-redirect([]) ->
-  ok.
+redirect(MFAs) ->
+  lists:foreach(fun(MFA) -> hipe_bifs:redirect_referred_from(MFA) end, MFAs).
 
 %%--------------------------------------------------------------------
 %% Given a list of MFAs, remove all referred_from references having
@@ -847,11 +868,8 @@ redirect([]) ->
 %% list. The refers_to list is used here to find the CalleeMFAs whose
 %% referred_from lists should be updated.
 %%
-remove_refs_from([CallerMFA|CallerMFAs]) ->
-  hipe_bifs:remove_refs_from(CallerMFA),
-  remove_refs_from(CallerMFAs);
-remove_refs_from([]) ->
-  [].
+remove_refs_from(MFAs) ->
+  lists:foreach(fun(MFA) -> hipe_bifs:remove_refs_from(MFA) end, MFAs).
 
 %%--------------------------------------------------------------------
 

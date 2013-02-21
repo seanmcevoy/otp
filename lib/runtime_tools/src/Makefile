@@ -1,7 +1,7 @@
 #
 # %CopyrightBegin%
 # 
-# Copyright Ericsson AB 1999-2012. All Rights Reserved.
+# Copyright Ericsson AB 1999-2013. All Rights Reserved.
 # 
 # The contents of this file are subject to the Erlang Public License,
 # Version 1.1, (the "License"); you may not use this file except in
@@ -35,13 +35,8 @@ RELSYSDIR = $(RELEASE_PATH)/lib/runtime_tools-$(VSN)
 # ----------------------------------------------------
 
 MODULES= \
+	appmon_info \
 	erts_alloc_config \
-	inviso_rt \
-	inviso_rt_meta \
-	inviso_rt_lib \
-	inviso_as_lib \
-	inviso_autostart \
-	inviso_autostart_server \
 	runtime_tools \
 	runtime_tools_sup \
 	dbg \
@@ -73,7 +68,8 @@ EXAMPLE_FILES= \
 ERL_COMPILE_FLAGS += \
 	-I../include \
 	-I ../../et/include \
-	-I ../../../libraries/et/include
+	-I ../../../libraries/et/include \
+	-Werror
 
 # ----------------------------------------------------
 # Targets
@@ -86,10 +82,10 @@ clean:
 	rm -f errs core *~
 
 $(APP_TARGET): $(APP_SRC) ../vsn.mk
-	sed -e 's;%VSN%;$(VSN);' $< > $@
+	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $< > $@
 
 $(APPUP_TARGET): $(APPUP_SRC) ../vsn.mk
-	sed -e 's;%VSN%;$(VSN);' $< > $@
+	$(vsn_verbose)sed -e 's;%VSN%;$(VSN);' $< > $@
 
 docs:
 

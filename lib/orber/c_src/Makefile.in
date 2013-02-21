@@ -56,16 +56,10 @@ debug opt: $(OBJDIR) orber
 
 ifeq ($(findstring win32,$(TARGET)),win32)
 orber: 
-	echo "Nothing to build on NT"
-else
-ifeq ($(findstring vxworks,$(TARGET)),vxworks)
-orber: 
-	echo "Nothing to build for VxWorks"
-
+	$(V_colon)echo "Nothing to build on NT"
 else
 orber: 
-	echo "Nothing to build"	
-endif
+	$(V_colon)echo "Nothing to build"
 endif
 
 clean:
@@ -80,7 +74,7 @@ $(OBJDIR):
 	-mkdir -p $(OBJDIR)
 
 $(OBJDIR)/%.o: %.c
-	$(CC) -c -o $@ $(ALL_CFLAGS) $<
+	$(V_CC) -c -o $@ $(ALL_CFLAGS) $<
 
 # ----------------------------------------------------
 # Release Target
@@ -94,19 +88,11 @@ release_spec: opt
 	$(INSTALL_PROGRAM) $(CC_FILES) "$(RELSYSDIR)/priv/src"
 	$(INSTALL_PROGRAM) $(HH_FILES) "$(RELSYSDIR)/priv/include"
 else
-ifeq ($(findstring vxworks,$(TARGET)),vxworks)
-release_spec:
-	$(INSTALL_DIR) "$(RELSYSDIR)/priv/src"
-	$(INSTALL_DIR) "$(RELSYSDIR)/priv/include"
-	$(INSTALL_PROGRAM) $(CC_FILES) "$(RELSYSDIR)/priv/src"
-	$(INSTALL_PROGRAM) $(HH_FILES) "$(RELSYSDIR)/priv/include"
-else
 release_spec: opt
 	$(INSTALL_DIR) "$(RELSYSDIR)/priv/src"
 	$(INSTALL_DIR) "$(RELSYSDIR)/priv/include"
 	$(INSTALL_DATA) $(CC_FILES) "$(RELSYSDIR)/priv/src"
 	$(INSTALL_DATA) $(HH_FILES) "$(RELSYSDIR)/priv/include"
-endif
 endif
 
 

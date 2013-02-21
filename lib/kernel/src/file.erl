@@ -1,7 +1,7 @@
 %%
 %% %CopyrightBegin%
 %%
-%% Copyright Ericsson AB 1996-2012. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2013. All Rights Reserved.
 %%
 %% The contents of this file are subject to the Erlang Public License,
 %% Version 1.1, (the "License"); you may not use this file except in
@@ -27,18 +27,18 @@
 -export([format_error/1]).
 %% File system and metadata.
 -export([get_cwd/0, get_cwd/1, set_cwd/1, delete/1, rename/2,
-	 make_dir/1, del_dir/1, list_dir/1,
+	 make_dir/1, del_dir/1, list_dir/1, list_dir_all/1,
 	 read_file_info/1, read_file_info/2,
 	 write_file_info/2, write_file_info/3,
 	 altname/1,
 	 read_link_info/1, read_link_info/2,
-	 read_link/1,
+	 read_link/1, read_link_all/1,
 	 make_link/2, make_symlink/2,
 	 read_file/1, write_file/2, write_file/3]).
 %% Specialized
 -export([ipread_s32bu_p32bu/3]).
 %% Generic file contents.
--export([open/2, close/1, advise/4,
+-export([open/2, close/1, advise/4, allocate/3,
 	 read/2, write/2, 
 	 pread/2, pread/3, pwrite/2, pwrite/3,
 	 read_line/1,
@@ -67,8 +67,8 @@
 -export([ipread_s32bu_p32bu_int/3]).
 
 %% Types that can be used from other modules -- alphabetically ordered.
--export_type([date_time/0, fd/0, file_info/0, filename/0, io_device/0,
-	      name/0, posix/0]).
+-export_type([date_time/0, fd/0, file_info/0, filename/0, filename_all/0,
+              io_device/0, name/0, posix/0]).
 
 %%% Includes and defines
 -include("file.hrl").
@@ -80,7 +80,8 @@
 -define(RAM_FILE, ram_file).           % Module
 
 %% data types
--type filename()  :: string() | binary().
+-type filename()  :: string().
+-type filename_all() :: string() | binary().
 -type file_info() :: #file_info{}.
 -type fd()        :: #file_descriptor{}.
 -type io_device() :: pid() | fd().
@@ -111,6 +112,24 @@
 -type sendfile_option() :: {chunk_size, non_neg_integer()}.
 -type file_info_option() :: {'time', 'local'} | {'time', 'universal'} 
 			  | {'time', 'posix'}.
+%%% BIFs
+
+-export([file_info/1, native_name_encoding/0]).
+
+-spec file_info(Filename) -> {ok, FileInfo} | {error, Reason} when
+      Filename :: name(),
+      FileInfo :: file_info(),
+      Reason :: posix() | badarg.
+
+file_info(_) ->
+    erlang:nif_error(undef).
+
+-spec native_name_encoding() -> latin1 | utf8.
+
+native_name_encoding() ->
+    erlang:nif_error(undef).
+
+%%% End of BIFs
 
 
 %%%-----------------------------------------------------------------
@@ -130,7 +149,7 @@ format_error({Line, ?MODULE, {Reason, Stacktrace}}) ->
     io_lib:format("~w: evaluation failed with reason ~w and stacktrace ~w", 
                   [Line, Reason, Stacktrace]);
 format_error({Line, Mod, Reason}) ->
-    io_lib:format("~w: ~s", [Line, Mod:format_error(Reason)]);
+    io_lib:format("~w: ~ts", [Line, Mod:format_error(Reason)]);
 format_error(badarg) ->
     "bad argument";
 format_error(system_limit) ->
@@ -260,6 +279,14 @@ read_link_info(Name, Opts) when is_list(Opts) ->
 read_link(Name) ->
     check_and_call(read_link, [file_name(Name)]).
 
+-spec read_link_all(Name) -> {ok, Filename} | {error, Reason} when
+      Name :: name(),
+      Filename :: filename_all(),
+      Reason :: posix() | badarg.
+
+read_link_all(Name) ->
+    check_and_call(read_link_all, [file_name(Name)]).
+
 -spec write_file_info(Filename, FileInfo) -> ok | {error, Reason} when
       Filename :: name(),
       FileInfo :: file_info(),
@@ -284,6 +311,14 @@ write_file_info(Name, Info = #file_info{}, Opts) when is_list(Opts) ->
 
 list_dir(Name) ->
     check_and_call(list_dir, [file_name(Name)]).
+
+-spec list_dir_all(Dir) -> {ok, Filenames} | {error, Reason} when
+      Dir :: name(),
+      Filenames :: [filename_all()],
+      Reason :: posix() | badarg.
+
+list_dir_all(Name) ->
+    check_and_call(list_dir_all, [file_name(Name)]).
 
 -spec read_file(Filename) -> {ok, Binary} | {error, Reason} when
       Filename :: name(),
@@ -379,9 +414,10 @@ raw_write_file_info(Name, #file_info{} = Info) ->
 
 %% Contemporary mode specification - list of options
 
--spec open(Filename, Modes) -> {ok, IoDevice} | {error, Reason} when
+-spec open(File, Modes) -> {ok, IoDevice} | {error, Reason} when
+      File :: Filename | iodata(),
       Filename :: name(),
-      Modes :: [mode()],
+      Modes :: [mode() | ram],
       IoDevice :: io_device(),
       Reason :: posix() | badarg | system_limit.
 
@@ -470,6 +506,18 @@ advise(#file_descriptor{module = Module} = Handle, Offset, Length, Advise) ->
     Module:advise(Handle, Offset, Length, Advise);
 advise(_, _, _, _) ->
     {error, badarg}.
+
+-spec allocate(File, Offset, Length) ->
+	'ok' | {'error', posix()} when
+      File :: io_device(),
+      Offset :: non_neg_integer(),
+      Length :: non_neg_integer().
+
+allocate(File, Offset, Length) when is_pid(File) ->
+    R = file_request(File, {allocate, Offset, Length}),
+    wait_file_reply(File, R);
+allocate(#file_descriptor{module = Module} = Handle, Offset, Length) ->
+    Module:allocate(Handle, Offset, Length).
 
 -spec read(IoDevice, Number) -> {ok, Data} | eof | {error, Reason} when
       IoDevice :: io_device() | atom(),
@@ -560,7 +608,7 @@ pread(_, _, _) ->
 write(File, Bytes) when (is_pid(File) orelse is_atom(File)) ->
     case make_binary(Bytes) of
 	Bin when is_binary(Bin) ->
-	    io:request(File, {put_chars,Bin});
+	    io:request(File, {put_chars,latin1,Bin});
 	Error ->
 	    Error
     end;
@@ -1165,7 +1213,7 @@ change_time(Name, {{AY, AM, AD}, {AH, AMin, ASec}}=Atime,
 -spec sendfile(RawFile, Socket, Offset, Bytes, Opts) ->
    {'ok', non_neg_integer()} | {'error', inet:posix() | 
 				closed | badarg | not_owner} when
-      RawFile :: file:fd(),
+      RawFile :: fd(),
       Socket :: inet:socket(),
       Offset :: non_neg_integer(),
       Bytes :: non_neg_integer(),
@@ -1191,7 +1239,7 @@ sendfile(File, Sock, Offset, Bytes, Opts) ->
 -spec sendfile(Filename, Socket) ->
    {'ok', non_neg_integer()} | {'error', inet:posix() | 
 				closed | badarg | not_owner}
-      when Filename :: file:name(),
+      when Filename :: name(),
 	   Socket :: inet:socket().
 sendfile(Filename, Sock)  ->
     case file:open(Filename, [read, raw, binary]) of
@@ -1296,6 +1344,7 @@ sendfile_send(Sock, Data, Old) ->
 %%% Helpers
 
 consult_stream(Fd) ->
+    _ = epp:set_encoding(Fd),
     consult_stream(Fd, 1, []).
 
 consult_stream(Fd, Line, Acc) ->
@@ -1309,6 +1358,7 @@ consult_stream(Fd, Line, Acc) ->
     end.
 
 eval_stream(Fd, Handling, Bs) ->
+    _ = epp:set_encoding(Fd),
     eval_stream(Fd, Handling, 1, undefined, [], Bs).
 
 eval_stream(Fd, H, Line, Last, E, Bs) ->

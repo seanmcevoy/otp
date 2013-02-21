@@ -1,7 +1,7 @@
 /*
  * %CopyrightBegin%
  *
- * Copyright Ericsson AB 2008-2011. All Rights Reserved.
+ * Copyright Ericsson AB 2008-2013. All Rights Reserved.
  *
  * The contents of this file are subject to the Erlang Public License,
  * Version 1.1, (the "License"); you may not use this file except in
@@ -71,14 +71,9 @@ void erts_init_bif_re(void)
     erts_pcre_stack_free = &erts_erts_pcre_stack_free;
     default_table = NULL; /* ISO8859-1 default, forced into pcre */
     max_loop_limit = CONTEXT_REDS * LOOP_FACTOR;
- 
-    sys_memset((void *) &re_exec_trap_export, 0, sizeof(Export));
-    re_exec_trap_export.address = &re_exec_trap_export.code[3];
-    re_exec_trap_export.code[0] = am_erlang;
-    re_exec_trap_export.code[1] = am_re_run_trap;
-    re_exec_trap_export.code[2] = 3;
-    re_exec_trap_export.code[3] = (BeamInstr) em_apply_bif;
-    re_exec_trap_export.code[4] = (BeamInstr) &re_exec_trap;
+
+    erts_init_trap_export(&re_exec_trap_export, am_erlang, am_re_run_trap, 3,
+			  &re_exec_trap);
 
     grun_trap_exportp =  erts_export_put(am_re,am_grun,3);
     urun_trap_exportp =  erts_export_put(am_re,am_urun,3);
@@ -189,6 +184,7 @@ static Eterm make_signed_integer(int x, Process *p)
 #define CAPSPEC_VALUES 0
 #define CAPSPEC_TYPE 1
 #define CAPSPEC_SIZE 2
+#define CAPSPEC_INIT {0,0}
 
 static int /* 0 == ok, < 0 == error */ 
 parse_options(Eterm listp, /* in */
@@ -418,7 +414,7 @@ build_compile_result(Process *p, Eterm error_tag, pcre *result, int errcode, con
 static BIF_RETTYPE
 re_compile(Process* p, Eterm arg1, Eterm arg2)
 {
-    Uint slen;
+    ErlDrvSizeT slen;
     char *expr;
     pcre *result;
     int errcode = 0;
@@ -449,7 +445,7 @@ re_compile(Process* p, Eterm arg1, Eterm arg2)
         BIF_ERROR(p,BADARG);
     }
     expr = erts_alloc(ERTS_ALC_T_RE_TMP_BUF, slen + 1);
-    if (io_list_to_buf(arg1, expr, slen) != 0) {
+    if (erts_iolist_to_buf(arg1, expr, slen) != 0) {
 	erts_free(ERTS_ALC_T_RE_TMP_BUF, expr);
 	BIF_ERROR(p,BADARG);
     }
@@ -802,7 +798,7 @@ build_capture(Eterm capture_spec[CAPSPEC_SIZE], const pcre *code)
 			memcpy(tmpb,ap->name,ap->len);
 			tmpb[ap->len] = '\0';
 		    } else {
-			Uint slen;
+			ErlDrvSizeT slen;
 			if (erts_iolist_size(val, &slen)) {
 			    goto error;
 			}
@@ -814,7 +810,7 @@ build_capture(Eterm capture_spec[CAPSPEC_SIZE], const pcre *code)
 						    (tmpbsiz = slen + 1));
 			    }
 			}
-			if (io_list_to_buf(val, tmpb, slen) != 0) {
+			if (erts_iolist_to_buf(val, tmpb, slen) != 0) {
 			    goto error;
 			}
 			tmpb[slen] = '\0';
@@ -858,7 +854,7 @@ re_run(Process *p, Eterm arg1, Eterm arg2, Eterm arg3)
     const pcre *code_tmp;
     RestartContext restart;
     byte *temp_alloc = NULL;
-    Uint slength;
+    ErlDrvSizeT slength;
     int startoffset = 0;
     int options = 0, comp_options = 0;
     int ovsize;
@@ -869,7 +865,7 @@ re_run(Process *p, Eterm arg1, Eterm arg2, Eterm arg3)
     size_t code_size;
     Uint loop_limit_tmp;
     unsigned long loop_count;
-    Eterm capture[CAPSPEC_SIZE];
+    Eterm capture[CAPSPEC_SIZE] = CAPSPEC_INIT;
     int is_list_cap;
 
     if (parse_options(arg3,&comp_options,&options,&pflags,&startoffset,capture)
@@ -882,7 +878,7 @@ re_run(Process *p, Eterm arg1, Eterm arg2, Eterm arg3)
     if (is_not_tuple(arg2) || (arityval(*tuple_val(arg2)) != 4)) {
 	if (is_binary(arg2) || is_list(arg2) || is_nil(arg2)) {
 	    /* Compile from textual RE */
-	    Uint slen;
+	    ErlDrvSizeT slen;
 	    char *expr;
 	    pcre *result;
 	    int errcode = 0;
@@ -901,7 +897,7 @@ re_run(Process *p, Eterm arg1, Eterm arg2, Eterm arg3)
 	    }
 	    
 	    expr = erts_alloc(ERTS_ALC_T_RE_TMP_BUF, slen + 1);
-	    if (io_list_to_buf(arg2, expr, slen) != 0) {
+	    if (erts_iolist_to_buf(arg2, expr, slen) != 0) {
 		erts_free(ERTS_ALC_T_RE_TMP_BUF, expr);
 		BIF_ERROR(p,BADARG);
 	    }
@@ -1044,7 +1040,7 @@ handle_iolist:
 	}
 	restart.subject = erts_alloc(ERTS_ALC_T_RE_SUBJECT, slength);
 
-	if (io_list_to_buf(arg1, restart.subject, slength) != 0) {
+	if (erts_iolist_to_buf(arg1, restart.subject, slength) != 0) {
 	    erts_free(ERTS_ALC_T_RE_SUBJECT, restart.ovector);
 	    erts_free(ERTS_ALC_T_RE_SUBJECT, restart.code);
 	    erts_free(ERTS_ALC_T_RE_SUBJECT, restart.subject);

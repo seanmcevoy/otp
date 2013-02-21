@@ -61,15 +61,15 @@
 %% (for WIN32): absname("/") -> "D:/"
 
 
--spec absname(Filename) -> file:filename() when
+-spec absname(Filename) -> file:filename_all() when
       Filename :: file:name().
 absname(Name) ->
     {ok, Cwd} = file:get_cwd(),
     absname(Name, Cwd).
 
--spec absname(Filename, Dir) -> file:filename() when
+-spec absname(Filename, Dir) -> file:filename_all() when
       Filename :: file:name(),
-      Dir :: file:filename().
+      Dir :: file:name().
 absname(Name, AbsBase) when is_binary(Name), is_list(AbsBase) ->
     absname(Name,filename_string_to_binary(AbsBase));
 absname(Name, AbsBase) when is_list(Name), is_binary(AbsBase) ->
@@ -122,8 +122,8 @@ absname_vr([[X, $:]|Name], _, _AbsBase) ->
 %% This is just a join/2, but assumes that 
 %% AbsBase must be absolute and Name must be relative.
 
--spec absname_join(Dir, Filename) -> file:filename() when
-      Dir :: file:filename(),
+-spec absname_join(Dir, Filename) -> file:filename_all() when
+      Dir :: file:name(),
       Filename :: file:name().
 absname_join(AbsBase, Name) ->
     join(AbsBase, flatten(Name)).
@@ -136,7 +136,7 @@ absname_join(AbsBase, Name) ->
 %%           basename("/usr/foo/") -> "foo"  (trailing slashes ignored)
 %%           basename("/") -> []
 
--spec basename(Filename) -> file:filename() when
+-spec basename(Filename) -> file:filename_all() when
       Filename :: file:name().
 basename(Name) when is_binary(Name) ->
     case os:type() of
@@ -201,7 +201,7 @@ skip_prefix(Name, _) ->
 %%	    rootname(basename("xxx.jam")) -> "xxx"
 %%	    rootname(basename("xxx.erl")) -> "xxx"
 
--spec basename(Filename, Ext) -> file:filename() when
+-spec basename(Filename, Ext) -> file:filename_all() when
       Filename :: file:name(),
       Ext :: file:name().
 basename(Name, Ext) when is_binary(Name), is_list(Ext) ->
@@ -251,7 +251,7 @@ basename([], _Ext, Tail, _DrvSep2) ->
 %% Example: dirname("/usr/src/kalle.erl") -> "/usr/src",
 %%	    dirname("kalle.erl") -> "."
 
--spec dirname(Filename) -> file:filename() when
+-spec dirname(Filename) -> file:filename_all() when
       Filename :: file:name().
 dirname(Name) when is_binary(Name) ->
     {Dsep,Drivesep} = separators(),
@@ -344,7 +344,7 @@ dirjoin1([H|T],Acc,Sep) ->
 %%
 %% On Windows:  fn:dirname("\\usr\\src/kalle.erl") -> "/usr/src"
 
--spec extension(Filename) -> file:filename() when
+-spec extension(Filename) -> file:filename_all() when
       Filename :: file:name().
 extension(Name) when is_binary(Name) ->
     {Dsep,_} = separators(),
@@ -387,8 +387,8 @@ extension([], Result, _OsType) ->
 
 %% Joins a list of filenames with directory separators.
 
--spec join(Components) -> file:filename() when
-      Components :: [file:filename()].
+-spec join(Components) -> file:filename_all() when
+      Components :: [file:name()].
 join([Name1, Name2|Rest]) ->
     join([join(Name1, Name2)|Rest]);
 join([Name]) when is_list(Name) ->
@@ -400,9 +400,9 @@ join([Name]) when is_atom(Name) ->
 
 %% Joins two filenames with directory separators.
 
--spec join(Name1, Name2) -> file:filename() when
-      Name1 :: file:filename(),
-      Name2 :: file:filename().
+-spec join(Name1, Name2) -> file:filename_all() when
+      Name1 :: file:name(),
+      Name2 :: file:name().
 join(Name1, Name2) when is_list(Name1), is_list(Name2) ->
     OsType = major_os_type(),
     case pathtype(Name2) of
@@ -488,7 +488,7 @@ maybe_remove_dirsep(Name, _) ->
 %% a given base directory, which is is assumed to be normalised
 %% by a previous call to join/{1,2}.
 
--spec append(file:filename(), file:name()) -> file:filename().
+-spec append(file:filename_all(), file:name()) -> file:filename_all().
 append(Dir, Name) when is_binary(Dir), is_binary(Name) ->
     <<Dir/binary,$/:8,Name/binary>>;
 append(Dir, Name) when is_binary(Dir) ->
@@ -564,7 +564,7 @@ win32_pathtype(_) 		  -> relative.
 %% Examples: rootname("/jam.src/kalle") -> "/jam.src/kalle"
 %%           rootname("/jam.src/foo.erl") -> "/jam.src/foo"
 
--spec rootname(Filename) -> file:filename() when
+-spec rootname(Filename) -> file:filename_all() when
       Filename :: file:name().
 rootname(Name) when is_binary(Name) ->
     list_to_binary(rootname(binary_to_list(Name))); % No need to handle unicode, . is < 128
@@ -594,7 +594,7 @@ rootname([], Root, _Ext, _OsType) ->
 %% Examples: rootname("/jam.src/kalle.jam", ".erl") -> "/jam.src/kalle.jam"
 %%           rootname("/jam.src/foo.erl", ".erl") -> "/jam.src/foo"
 
--spec rootname(Filename, Ext) -> file:filename() when
+-spec rootname(Filename, Ext) -> file:filename_all() when
       Filename :: file:name(),
       Ext :: file:name().
 rootname(Name, Ext) when is_binary(Name), is_binary(Ext) ->
@@ -624,7 +624,7 @@ rootname2([Char|Rest], Ext, Result) when is_integer(Char) ->
 
 -spec split(Filename) -> Components when
       Filename :: file:name(),
-      Components :: [file:filename()].
+      Components :: [file:name()].
 split(Name) when is_binary(Name) ->
     case os:type() of
 	{win32, _} -> win32_splitb(Name);
@@ -717,8 +717,8 @@ split([], Comp, Components, OsType) ->
 %% will be converted to backslashes.  On all platforms, the
 %% name will be normalized as done by join/1.
 
--spec nativename(Path) -> file:filename() when
-      Path :: file:filename().
+-spec nativename(Path) -> file:filename_all() when
+      Path :: file:name().
 nativename(Name0) ->
     Name = join([Name0]),			%Normalize.
     case os:type() of
@@ -878,7 +878,7 @@ filter_options(_Base, [], Result) ->
 %% Gets the source file given path of object code and module name.
 
 get_source_file(Obj, Mod, Rules) ->
-    source_by_rules(dirname(Obj), packages:last(Mod), Rules).
+    source_by_rules(dirname(Obj), atom_to_list(Mod), Rules).
 
 source_by_rules(Dir, Base, [{From, To}|Rest]) ->
     case try_rule(Dir, Base, From, To) of
@@ -915,15 +915,13 @@ make_abs_path(BasePath, Path) ->
     join(BasePath, Path).
 
 major_os_type() ->
-    case os:type() of
-	{OsT, _} -> OsT;
-	OsT -> OsT
-    end.
+    {OsT, _} = os:type(),
+    OsT.
 
 %% flatten(List)
 %%  Flatten a list, also accepting atoms.
 
--spec flatten(Filename) -> file:filename() when
+-spec flatten(Filename) -> file:filename_all() when
       Filename :: file:name().
 flatten(Bin) when is_binary(Bin) ->
     Bin;

@@ -483,7 +483,7 @@ validate_properties(Properties) ->
     case mandatory_properties(Properties) of
 	ok -> 
 	    %% Second, check that property dependency are ok
-	    {ok, validate_properties2(Properties)};
+	    {ok, check_minimum_bytes_per_second(validate_properties2(Properties))};
 	Error ->
 	    throw(Error)
     end.
@@ -522,7 +522,18 @@ validate_properties2(Properties) ->
 		    throw(Error)
 	    end
     end.
-
+check_minimum_bytes_per_second(Properties) ->
+    case proplists:get_value(minimum_bytes_per_second, Properties, false) of
+	false ->
+	    Properties;
+	Nr ->
+	    case is_integer(Nr) of
+		false ->
+		    throw({error, {minimum_bytes_per_second, is_not_integer}});
+		_ ->
+		    Properties
+	    end
+    end.
 mandatory_properties(ConfigList) ->
     a_must(ConfigList, [server_name, port, server_root, document_root]).
 
@@ -829,9 +840,7 @@ os_info(Info) ->
 	{OsFamily, _OsName} when Info =:= partial ->
 	    lists:flatten(io_lib:format("(~w)", [OsFamily]));
 	{OsFamily, OsName} ->
-	    lists:flatten(io_lib:format("(~w/~w)", [OsFamily, OsName]));
-	OsFamily ->
-	    lists:flatten(io_lib:format("(~w)", [OsFamily]))
+	    lists:flatten(io_lib:format("(~w/~w)", [OsFamily, OsName]))
     end.
 
 otp_release() ->

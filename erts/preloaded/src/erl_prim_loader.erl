@@ -149,8 +149,18 @@ start_it("inet", Id, Pid, Hosts) ->
 
 start_it("efile", Id, Pid, _Hosts) ->
     process_flag(trap_exit, true),
-    {ok, Port} = prim_file:open([binary]),
-    init_ack(Pid),
+    {ok, Port} = prim_file:start(),
+    %% Check that we started in a valid directory.
+    case prim_file:get_cwd(Port) of
+	{error, _} ->
+	    %% At this point in the startup, we have no error_logger at all.
+	    Report = "Invalid current directory or invalid filename "
+		"mode: loader cannot read current directory\n",
+	    erlang:display(Report),
+	    exit({error, invalid_current_directory});
+	_ ->
+	    init_ack(Pid)
+    end,
     MultiGet = case erlang:system_info(thread_pool_size) of
                    0 -> false;
                    _ -> true
@@ -434,7 +444,7 @@ efile_multi_get_file_from_port2(_MFs, 0, _Max, State, _Paths, _Fun, _Ref, Ret) -
 
 efile_par_get_file(Ref, State, {Mod,File} = MF, Paths, Pid, Fun) ->
     %% One port for each file read in "parallel":
-    case prim_file:open([binary]) of
+    case prim_file:start() of
         {ok, Port} ->
             Port0 = State#state.data,
             State1 = State#state{data = Port},
@@ -1385,14 +1395,7 @@ pathtype(Name) when is_list(Name) ->
 	{unix, _}  -> 
 	    unix_pathtype(Name);
 	{win32, _} ->
-	    win32_pathtype(Name);
-	{vxworks, _} ->
-	    case vxworks_first(Name) of
-		{device, _Rest, _Dev} ->
-		    absolute;
-		_ ->
-		    relative
-	    end
+	    win32_pathtype(Name)
     end.
 
 unix_pathtype(Name) ->
@@ -1427,32 +1430,6 @@ win32_pathtype(Name) ->
 	    volumerelative;
 	_ -> 
 	    relative
-    end.
-
-vxworks_first(Name) ->
-    case Name of
-	[] ->
-	    {not_device, [], []};
-	[$/ | T] ->
-	    vxworks_first2(device, T, [$/]);
-	[H | T] when is_list(H) ->
-	    vxworks_first(H ++ T);
-	[H | T] ->
-	    vxworks_first2(not_device, T, [H])
-    end.
-
-vxworks_first2(Devicep, Name, FirstComp) ->
-    case Name of 
-	[] ->
-    {Devicep, [], FirstComp};
-	[$/ |T ] ->
-	    {Devicep, [$/ | T], FirstComp};
-	[$: | T]->
-	    {device, T, [$: | FirstComp]};
-	[H | T] when is_list(H) ->
-	    vxworks_first2(Devicep, H ++ T, FirstComp);
-	[H | T] ->
-	    vxworks_first2(Devicep, T, [H | FirstComp])
     end.
 
 normalize(Name, Acc) ->

@@ -16,13 +16,8 @@
 #
 # %CopyrightEnd%
 
-ifneq ($(ERL_TOP),)
 include $(ERL_TOP)/make/target.mk
 include $(ERL_TOP)/make/$(TARGET)/otp.mk
-else
-include $(DIAMETER_TOP)/make/target.mk
-include $(DIAMETER_TOP)/make/$(TARGET)/rules.mk
-endif
 
 include ../../vsn.mk
 
@@ -39,7 +34,8 @@ XML_REF_FILES = $(XML_REF1_FILES) $(XML_REF3_FILES) $(XML_REF4_FILES)
 
 XML_FILES = $(BOOK_FILES) $(XML_APPLICATION_FILES) \
             $(XML_REF_FILES) \
-            $(XML_PART_FILES) $(XML_CHAPTER_FILES) 
+            $(XML_PART_FILES) $(XML_CHAPTER_FILES) \
+            seealso.ent
 
 INTERNAL_HTML_FILES = $(TECHNICAL_DESCR_FILES:%.xml=$(HTMLDIR)/%.html)
 
@@ -98,7 +94,7 @@ html: gifs $(HTML_REF_MAN_FILE)
 
 clean clean_docs: clean_pdf clean_html clean_man
 	rm -f errs core *~
-	rm -f depend.mk
+	rm -f depend.mk seehere.ent
 
 clean_pdf:
 	rm -f $(PDFDIR)/*
@@ -155,11 +151,8 @@ info:
 # ----------------------------------------------------
 # Release Target
 # ---------------------------------------------------- 
-ifneq ($(ERL_TOP),)
+
 include $(ERL_TOP)/make/otp_release_targets.mk
-else
-include $(DIAMETER_TOP)/make/release_targets.mk
-endif
 
 release_docs_spec: $(LOCAL)docs
 	$(INSTALL_DIR) "$(RELSYSDIR)/doc/pdf"
@@ -178,8 +171,10 @@ release_docs_spec: $(LOCAL)docs
 
 release_spec:
 
-depend.mk: depend.sed $(XML_REF_FILES) $(XML_CHAPTER_FILES) Makefile
-	(for f in $(XML_REF_FILES) $(XML_CHAPTER_FILES); do \
+depend.mk: depend.sed Makefile seealso.ent \
+           $(XML_REF_FILES) $(XML_CHAPTER_FILES)
+	$(gen_verbose)sed -f seehere.sed seealso.ent > seehere.ent
+	$(V_at)(for f in $(XML_REF_FILES) $(XML_CHAPTER_FILES); do \
 	     sed -f $< $$f | sed "s@%FILE%@`basename $$f .xml`@g"; \
 	 done) \
 	> $@
